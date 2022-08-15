@@ -56,6 +56,19 @@ static const struct hantro_fmt rockchip_vpu_enc_fmts[] = {
 			.step_height = MB_DIM,
 		},
 	},
+	{
+		.fourcc = V4L2_PIX_FMT_H264_SLICE,
+		.codec_mode = HANTRO_MODE_H264_ENC,
+		.max_depth = 2,
+		.frmsize = {
+			.min_width = 96,
+			.max_width = 8192,
+			.step_width = MB_DIM,
+			.min_height = 32,
+			.max_height = 8192,
+			.step_height = MB_DIM,
+		},
+	}
 };
 
 static const struct hantro_fmt rockchip_vpu1_postproc_fmts[] = {
@@ -313,9 +326,22 @@ static irqreturn_t rockchip_vpu2_vdpu_irq(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+static irqreturn_t rockchip_vpu2_vepu_thread(int irq, void *dev_id)
+{
+	struct hantro_dev *vpu = dev_id;
+	struct hantro_ctx *ctx =
+		v4l2_m2m_get_curr_priv(vpu->m2m_dev);
+
+	hantro_thread_done(vpu, ctx->result);
+
+	return IRQ_HANDLED;
+}
+
 static irqreturn_t rockchip_vpu2_vepu_irq(int irq, void *dev_id)
 {
 	struct hantro_dev *vpu = dev_id;
+	struct hantro_ctx *ctx =
+		v4l2_m2m_get_curr_priv(vpu->m2m_dev);
 	enum vb2_buffer_state state;
 	u32 status;
 
@@ -323,12 +349,12 @@ static irqreturn_t rockchip_vpu2_vepu_irq(int irq, void *dev_id)
 	state = (status & VEPU_REG_INTERRUPT_FRAME_READY) ?
 		VB2_BUF_STATE_DONE : VB2_BUF_STATE_ERROR;
 
+	ctx->result = state;
+
 	vepu_write(vpu, 0, VEPU_REG_INTERRUPT);
 	vepu_write(vpu, 0, VEPU_REG_AXI_CTRL);
 
-	hantro_irq_done(vpu, state);
-
-	return IRQ_HANDLED;
+	return IRQ_WAKE_THREAD;
 }
 
 static int rk3036_vpu_hw_init(struct hantro_dev *vpu)
@@ -470,6 +496,13 @@ static const struct hantro_codec_ops rk3399_vpu_codec_ops[] = {
 		.reset = rockchip_vpu2_enc_reset,
 		.done = rockchip_vpu2_jpeg_enc_done,
 	},
+	[HANTRO_MODE_H264_ENC] = {
+		.done = rockchip_vpu2_h264_enc_done,
+		.run = rockchip_vpu2_h264_enc_run,
+		.reset = rockchip_vpu2_enc_reset,
+		.init = hantro_h264_enc_init,
+		.exit = hantro_h264_enc_exit,
+	},
 	[HANTRO_MODE_H264_DEC] = {
 		.run = rockchip_vpu2_h264_dec_run,
 		.reset = rockchip_vpu2_dec_reset,
@@ -516,7 +549,7 @@ static const struct hantro_irq rockchip_vdpu2_irqs[] = {
 };
 
 static const struct hantro_irq rockchip_vpu2_irqs[] = {
-	{ "vepu", rockchip_vpu2_vepu_irq },
+	{ "vepu", rockchip_vpu2_vepu_irq, rockchip_vpu2_vepu_thread },
 	{ "vdpu", rockchip_vpu2_vdpu_irq },
 };
 
@@ -625,8 +658,8 @@ const struct hantro_variant rk3399_vpu_variant = {
 	.dec_offset = 0x400,
 	.dec_fmts = rk3399_vpu_dec_fmts,
 	.num_dec_fmts = ARRAY_SIZE(rk3399_vpu_dec_fmts),
-	.codec = HANTRO_JPEG_ENCODER | HANTRO_MPEG2_DECODER |
-		 HANTRO_VP8_DECODER,
+	.codec = HANTRO_JPEG_ENCODER | HANTRO_H264_ENCODER |
+		 HANTRO_MPEG2_DECODER | HANTRO_VP8_DECODER,
 	.codec_ops = rk3399_vpu_codec_ops,
 	.irqs = rockchip_vpu2_irqs,
 	.num_irqs = ARRAY_SIZE(rockchip_vpu2_irqs),
